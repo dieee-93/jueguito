@@ -506,3 +506,76 @@ Para cada hallazgo importante se registrarán, cuando estén disponibles:
 6. **Resultado de triangulación:** qué se confirma, qué sigue siendo inferencia y qué no se ha encontrado.
 
 No se exigirá que cada hallazgo tenga cinco fuentes si el proyecto no las ofrece. En esos casos se documentará explícitamente la limitación y se evitará presentar una inferencia como hecho confirmado.
+
+
+---
+
+## 15. OpenRA — cierre parcial del recorrido de guardado y restauración
+
+### 15.1 Qué contiene realmente el archivo de guardado
+
+La inspección de `OpenRA.Game/Network/GameSave.cs` confirma que el archivo no es simplemente una instantánea serializada de todos los actores y traits. El formato contiene:
+
+- Una secuencia de órdenes con información de frame y cliente.
+- Metadatos, incluido el último frame con órdenes y el último frame con hash de sincronización.
+- Un paquete de hash para validar la restauración.
+- Configuración global y datos de las plazas/clientes de la partida.
+- Un bloque de datos adicionales aportados por traits.
+- Información de generación de mapa en revisiones que la incluyen.
+
+El constructor `GameSave(string filepath)` lee los metadatos y los datos adicionales, y recupera el flujo de órdenes guardado. `Save(string path)` escribe el flujo de órdenes y luego los metadatos y datos de traits. `ParseOrders(...)` vuelve a emitir primero los datos de traits, reproduce las órdenes por frame y cliente y al final emite el hash guardado para validar la restauración.
+
+Fuente primaria: [`GameSave.cs`, revisión fijada](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Network/GameSave.cs).
+
+### 15.2 Ruta de restauración y datos de traits
+
+La interfaz `IGameSaveTraitData` permite a un trait producir datos complementarios y recuperarlos después. `World.Tick()` comprueba cuándo termina la fase `IsLoadingGameSave`, aplica los datos guardados a los traits correspondientes mediante `ResolveTraitData(...)`, limpia el búfer temporal y emite las notificaciones `INotifyGameLoaded`.
+
+Fuente: [`World.cs`, revisión fijada](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/World.cs).
+
+La documentación de implementación de la [PR #16411](https://github.com/OpenRA/OpenRA/pull/16411) coincide con el código: el estado principal se reconstruye mediante resimulación de órdenes; los datos adicionales de traits sirven para restaurar información que no se recupera solo de las órdenes, como la cámara o los grupos de selección. La PR señala también que se excluyen las órdenes inmediatas y el chat del registro reproducido.
+
+Como confirmación pública del resultado funcional, el anuncio oficial del playtest de agosto de 2019 indica que las misiones y partidas de escaramuza podían guardarse y reiniciarse después. Un anuncio de octubre de 2019 menciona correcciones de errores de guardado/carga, evidencia histórica de que el mecanismo necesitó iteración y no garantía de que todas las versiones posteriores carezcan de problemas.
+- [Anuncio oficial del playtest 20190825](https://www.openra.net/news/playtest-20190825/)
+- [Anuncio oficial del playtest 20191021](https://www.openra.net/news/playtest-20191021/)
+
+### 15.3 ¿La cola de producción se reconstruye al cargar?
+
+La nueva evidencia hace más plausible que la cola se reconstruya a través de las órdenes originales de producción, porque `GameSave` reproduce el historial de órdenes que forma parte de la simulación. Sin embargo, en esta iteración no se siguió de forma completa el tratamiento de `StartProduction` durante la reproducción ni se comprobó el estado exacto de progreso de cada elemento tras restaurar.
+
+Por tanto, la conclusión se actualiza así:
+
+- **Confirmado:** el mecanismo principal reproduce órdenes por frame para reconstruir la simulación.
+- **Confirmado:** existe un canal adicional de datos específicos para traits.
+- **Inferencia razonable, no cerrada:** la cola puede reconstruirse al reproducir órdenes de producción.
+- **Pendiente:** demostrar qué pasa con el progreso parcial, pagos, orden de la cola, pausa y estados de bloqueo tras cargar una partida guardada.
+- **No confirmado:** que la cola completa se serialice como una instantánea directa.
+
+### 15.4 Triangulación de pruebas y comportamiento publicado
+
+Se realizaron búsquedas en el código y en los registros del repositorio por términos relacionados con `GameSave`, `LoadGame`, `ProductionQueue` y pruebas de guardado/carga. No se localizó un test automatizado dedicado a un ciclo de guardar/cargar de `ProductionQueue` en la revisión estudiada. Tampoco se identificó un archivo de pruebas añadido en la PR #16411 entre sus archivos modificados.
+
+Esta es una conclusión acotada: **no se localizó ese test en la búsqueda realizada**. No demuestra que el proyecto carezca de pruebas indirectas, pruebas manuales, pruebas de integración externas o tests añadidos en otras revisiones.
+
+La issue histórica [#18255 — Loading saved games is slow on custom missions](https://github.com/OpenRA/OpenRA/issues/18255) describe un problema de rendimiento observado al cargar partidas de misiones personalizadas. Sirve como evidencia de experiencia operativa y limitaciones prácticas del enfoque, pero no es una prueba automatizada ni demuestra por sí sola un defecto en la restauración de la cola.
+
+### 15.5 Matriz de confianza revisada
+
+| Afirmación | Evidencia cruzada | Estado |
+|---|---|---|
+| El guardado contiene órdenes registradas y metadatos | Implementación de `GameSave.Save` y constructor de lectura | Confirmado |
+| La restauración reproduce órdenes por frame | `GameSave.ParseOrders` + descripción de PR #16411 | Confirmado |
+| El hash guardado se usa para validar la restauración | Código de `ParseOrders` + metadatos del archivo | Confirmado |
+| Traits pueden aportar/restaurar datos complementarios | Interfaz, `World.Tick`, traits de cámara/selección | Confirmado |
+| Toda la partida se guarda como snapshot de todos los campos | Contradice el mecanismo observado | No |
+| `ProductionQueue` se restaura íntegramente a partir de órdenes | No se trazó el caso completo | Parcial / pendiente |
+| Existe un test específico de round-trip para ProductionQueue | No localizado en las búsquedas y revisión examinadas | No localizado |
+| El mecanismo se ha usado en partidas reales | Anuncios oficiales de playtests y reportes de usuarios | Confirmado a nivel de función publicada; no equivale a cobertura de test |
+
+### 15.6 Conclusión de diseño provisional
+
+OpenRA muestra una estrategia de persistencia basada en **reconstrucción determinista más datos complementarios selectivos**, en vez de serializar necesariamente todo el estado vivo. Esto puede reducir la duplicación de lógica de restauración, pero impone requisitos fuertes: las órdenes deben poder reproducirse de forma consistente, el orden de eventos importa y los componentes que mantienen estado no derivable de órdenes necesitan un contrato explícito de guardado.
+
+No trasladar automáticamente este patrón al proyecto. Debe compararse con el coste de resimulación, la compatibilidad entre versiones, la aleatoriedad, los efectos externos y las mecánicas que requieren restauración exacta e inmediata.
+
+**Estado de la auditoría OpenRA:** mecanismo general de guardado/carga confirmado con varias fuentes; persistencia específica de ProductionQueue y sus tests aún sin cerrar.
