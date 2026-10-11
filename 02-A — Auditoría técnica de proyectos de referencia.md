@@ -615,3 +615,91 @@ No se localizó un test automatizado dedicado a guardar/cargar una `ProductionQu
 - **Reconstrucción específica y completa de ProductionQueue:** pendiente de verificación.
 - **Test automatizado de round-trip de ProductionQueue:** no localizado.
 - **Build o test ejecutado durante esta investigación:** no.
+
+
+---
+
+## 17. Auditoría de pruebas — primera pasada comparativa
+
+> **Estado:** evidencia documental añadida desde las revisiones de trabajo fijadas. No se ejecutaron builds ni tests propios. La búsqueda de tests específicos es acotada: “no localizado” no equivale a “no existe”.
+
+### 17.1 Cataclysm DDA: tests de coste y movimiento efectivo
+
+Fuentes fijadas:
+- [`tests/move_cost_test.cpp`](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/tests/move_cost_test.cpp)
+- [`tests/cardio_test.cpp`](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/tests/cardio_test.cpp)
+- [`src/game.h`](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/src/game.h)
+
+**Prueba localizada — `move_cost_test.cpp`:** cubre explícitamente el cálculo de coste de movimiento con condiciones como estar derribado, calzado, mutaciones, modo de movimiento y terreno. Los casos observados incluyen:
+- derribado: coste de carrera 100 → 300, y valores proporcionales en otras bases;
+- sin calzado: 100 → 116;
+- patines en línea sobre pavimento durante la carrera: 27;
+- patines en línea sobre hierba: 167;
+- otros tipos de patines tienen valores diferenciados según el terreno.
+
+El propio archivo identifica como función central de esta batería `Character::run_cost`. Por tanto, estos casos verifican principalmente el **cálculo del coste**, no la totalidad de la acción de moverse ni todas sus consecuencias.
+
+**Prueba localizada — `cardio_test.cpp`:** en la misma revisión fijada, el helper `running_steps(...)` llama a `g->walk_move(...)` alternando entre dos baldosas y comprueba que:
+- el personaje termina en la posición esperada en cada paso;
+- el movimiento reduce los puntos disponibles;
+- al agotarse los puntos, avanza el turno y se actualiza el cuerpo;
+- la resistencia disminuye en los pasos observados;
+- el ciclo termina al dejar de poder correr o alcanzar un límite defensivo.
+
+Esto es evidencia más integrada que un test de coste aislado: ejecuta la ruta de movimiento real y observa posición, puntos de movimiento y resistencia. No demuestra, por sí solo, cobertura exhaustiva de colisiones, criaturas, rampas, obstáculos o todas las ramas de `walk_move`.
+
+**Evaluación:** cobertura localizada tanto de reglas de coste como de un recorrido real de carrera y gasto de resistencia. La cobertura integral del movimiento sigue siendo **parcial**; no se calculó cobertura de líneas/ramas ni se ejecutó la suite.
+
+### 17.2 OpenTTD: regresión automatizada mediante scripts y resultados esperados
+
+Fuentes fijadas:
+- [`regression/regression/main.nut`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/regression/regression/main.nut)
+- [`regression/regression/CMakeLists.txt`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/regression/regression/CMakeLists.txt)
+- [`cmake/scripts/Regression.cmake`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/cmake/scripts/Regression.cmake)
+- [`src/rail_cmd.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/rail_cmd.cpp)
+
+**Prueba localizada — regresión de API:** `Regression::Rail()` en `main.nut` ejecuta una secuencia de operaciones de la API de IA: construir y quitar tramos de vía, construir y quitar señales, consultar tipos de señal, construir y eliminar vías en varias posiciones, y consultar si las baldosas conservan el tipo de transporte esperado. También cubre operaciones relacionadas con depósitos, estaciones y puntos de ruta.
+
+La infraestructura CMake declara entradas del caso de regresión —incluyendo script, resultados esperados y partida de prueba—; `Regression.cmake` compara el resultado producido con el archivo `result.txt`. Esto acredita una estrategia de **regresión por salida determinista esperada**, además de una secuencia de operaciones que observa cambios mediante la API.
+
+**Límite importante:** esta evidencia prueba la superficie observable de la API de IA y la consistencia de su salida, no constituye una prueba unitaria directa de cada rama interna de `CmdBuildSingleRail`, ni demuestra que cada rechazo por propiedad, pendiente, vehículo, señal u obstáculo tenga un caso dedicado. No se localizó en esta pasada una prueba específica de extremo a extremo que vincule la interfaz gráfica con el comando interno y todas sus consecuencias.
+
+**Evaluación:** hay pruebas de regresión funcionales de construcción de vías a través de la API; la cobertura detallada de validaciones internas queda **parcial / pendiente**.
+
+### 17.3 OpenRA: proyecto NUnit y pruebas de órdenes, pero no test específico localizado para la cola
+
+Fuentes fijadas:
+- [`OpenRA.Test/OpenRA.Test.csproj`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Test/OpenRA.Test.csproj)
+- [`OpenRA.Test/OpenRA.Game/OrderTest.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c75504d48c1ebd/OpenRA.Test/OpenRA.Game/OrderTest.cs)
+- [`OpenRA.Game/Network/GameSave.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c75504d48c1ebd/OpenRA.Game/Network/GameSave.cs)
+- [`OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs)
+
+El proyecto `OpenRA.Test` referencia Microsoft.NET.Test.Sdk y NUnit. Se localizó `OrderTest.cs`, que contiene pruebas relacionadas con el round-trip de órdenes serializadas. Esto demuestra que hay tests automatizados para ciertos contratos de órdenes; **no** demuestra que se verifique toda la aplicación de órdenes en el mundo de juego.
+
+En la búsqueda acotada por nombres y contenido no se localizó un test específico de round-trip de guardado/carga de partida ni un test dedicado a `ProductionQueue` que verifique inicio, progreso parcial, pausa, pago, bloqueo de salida y restauración. Este resultado se registra como **no localizado en la búsqueda realizada**, no como prueba de inexistencia. La presencia de `ISync` en `ProductionQueue` sigue sin ser evidencia suficiente de persistencia en partidas guardadas.
+
+**Evaluación:** pruebas unitarias de contratos de órdenes confirmadas; pruebas específicas de persistencia de partida y ciclo de vida de producción **pendientes de localizar o verificar**.
+
+### 17.4 Comparación de lo que prueban realmente
+
+| Proyecto | Evidencia automatizada localizada | Qué comprueba directamente | Límite de la evidencia |
+|---|---|---|---|
+| Cataclysm DDA | Tests de coste y helper que ejecuta `walk_move` | Costes concretos; posición, puntos de movimiento y resistencia durante carrera | No demuestra cobertura exhaustiva de obstáculos y ramas de movimiento |
+| OpenTTD | Script de regresión de API con resultado esperado | Secuencias de construcción/eliminación de vías, señales y consultas posteriores | No cubre necesariamente cada rama interna del comando ni el recorrido de interfaz gráfica |
+| OpenRA | NUnit y `OrderTest.cs` | Round-trip de órdenes serializadas en los casos definidos por el test | No se localizó test específico para guardado/carga de partida o restauración de `ProductionQueue` |
+
+### 17.5 Lecciones metodológicas para el videojuego experimental
+
+1. **Probar invariantes y resultados observables:** no limitarse a comprobar que una función devuelve éxito; verificar posición, recursos, tiempos, entidades y estado resultante.
+2. **Separar niveles de prueba:** test unitario de fórmula/regla, test integrado del flujo real y test de regresión de secuencias completas responden preguntas distintas.
+3. **Usar resultados esperados reproducibles cuando sea apropiado:** el patrón de OpenTTD puede ayudar a detectar cambios involuntarios en comportamientos públicos.
+4. **Probar serialización por round-trip y por comportamiento:** que una orden pueda serializarse no demuestra que el mundo restaurado sea equivalente; que una cola se sincronice tampoco demuestra que se guarde correctamente.
+5. **Registrar los límites:** cada test debe vincularse con la regla y el estado que observa, y la ausencia de un test localizado debe permanecer como incertidumbre.
+
+### 17.6 Pendientes de la auditoría de tests
+
+- [ ] Cataclysm DDA: ampliar búsqueda de tests de obstáculos, colisiones, criaturas y rampas en la revisión fijada.
+- [ ] OpenTTD: rastrear si hay regresiones que prueben fallos de construcción por propiedad, pendientes, vehículos, señales y obstáculos.
+- [ ] OpenRA: inspeccionar el contenido completo de `OrderTest.cs` y ampliar búsqueda de pruebas indirectas de carga de partidas y producción.
+- [ ] No declarar cobertura total de ninguno de los tres proyectos sin resultados de cobertura o un inventario exhaustivo de tests.
+- [ ] No afirmar ejecución de tests: esta iteración fue documental y estática.
