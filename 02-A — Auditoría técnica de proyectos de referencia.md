@@ -270,3 +270,83 @@ Orden recomendado:
 Este documento refleja una inspección estática preliminar y sus resultados deben revisarse antes de usarlos como base de decisiones costosas. No se han ejecutado builds, tests ni benchmarks propios. Los diagramas resumen flujos conceptuales; no sustituyen una traza de todas las ramas del código. La selección de tres proyectos tampoco permite generalizar automáticamente los patrones a todos los géneros o motores.
 
 **Estado final de esta versión:** documentación inicial consolidada; auditoría técnica abierta; arquitectura del proyecto sin decidir.
+
+
+---
+
+## 11. Iteración de seguimiento — trazas funcionales ampliadas
+
+> **Estado de esta iteración:** nuevas conexiones verificadas en código fuente de las revisiones indicadas. Las pruebas de extremo a extremo y la persistencia completa siguen abiertas.
+
+### 11.1 Cataclysm DDA: de la acción al desplazamiento efectivo
+
+En `avatar_action::move(...)`, el flujo inspeccionado incluye más que el cálculo inicial del destino:
+
+- Algunas restricciones hacen que la acción termine sin desplazarse.
+- El personaje puede cambiar de estado antes de resolver el destino.
+- Una baldosa con rampa puede modificar el nivel vertical del destino.
+- En el caso de minería automática, el personaje puede invocar la herramienta y diferir el movimiento hasta que la actividad termine.
+- Más adelante, la acción delega el intento de desplazamiento a `g->walk_move(dest_loc, via_ramp)`.
+- La ruta contiene lógica posterior al movimiento para actualizar visibilidad y modo seguro; también puede intentar revertir el desplazamiento si el jugador cancela una decisión de auto-observación.
+
+En otra ruta de movimiento del mismo archivo, la mutación de posición se hace mediante `you.setpos(...)`; luego se actualiza el mapa, se despachan eventos de movimiento, se calcula el gasto de puntos de movimiento y se consume resistencia cuando corresponde. Esta evidencia confirma que hay responsabilidades de movimiento repartidas en más de una función; todavía no constituye una traza única y exhaustiva de todas las variantes.
+
+**Conclusión ajustada:** `avatar_action::move` actúa como coordinador de la intención y de varias decisiones contextuales, mientras que `game::walk_move` participa en la resolución del desplazamiento ordinario. Para documentar el contrato completo aún hay que trazar la implementación de `walk_move`, sus validaciones de obstáculos/entidades y sus efectos secundarios.
+
+Referencia fijada: [`avatar_action.cpp`](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/src/avatar_action.cpp).
+
+### 11.2 OpenTTD: UI → comando → prueba → ejecución → resultado
+
+La ruta de construcción de vías ya tiene una conexión directa confirmada:
+
+1. `GenericPlaceRail(...)` en `rail_gui.cpp` publica `Command<Commands::BuildRail>::Post(...)`.
+2. La implementación de `CmdBuildSingleRail(...)` en `rail_cmd.cpp` valida parámetros, propiedad, compatibilidad de vías, combinaciones de tramos, presencia de trenes, pendientes y señales, entre otras condiciones.
+3. Cuando la operación es válida, la función calcula los costes y ejecuta modificaciones del mundo solo cuando `flags.Test(DoCommandFlag::Execute)` está activo.
+4. `command.cpp` contiene una fase de validación/prueba antes de la ejecución real en el flujo de comandos. `InternalExecuteValidateTestAndPrepExec(...)` puede detener la operación si la prueba falla, si solo se estima el coste o si no se cumplen las condiciones financieras; cuando procede, prepara el estado para la ejecución.
+5. `InternalDoAfter(...)` separa el tratamiento del resultado de prueba del tratamiento posterior a la ejecución, incluido el cargo de dinero en el caso correspondiente.
+
+Referencias:
+- [`rail_gui.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/rail_gui.cpp)
+- [`rail_cmd.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/rail_cmd.cpp)
+- [`command.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/command.cpp)
+
+**Implicación:** la separación entre validar/estimar y ejecutar es un patrón particularmente útil para acciones que modifican un mundo persistente. Aun así, la prueba de comando no debe confundirse automáticamente con un test unitario: es parte del protocolo de ejecución del juego.
+
+**Pendiente:** seguir el callback final y su presentación en la UI; localizar tests específicos de la construcción de vías y verificar cómo se persisten las modificaciones del mapa.
+
+### 11.3 OpenRA: UI → orden → cola → trabajo temporal → finalización
+
+La conexión de la interfaz con la cola quedó localizada en `ProductionPaletteWidget.cs`: al elegir un elemento construible, la UI consulta `BuildableItems()`, puede comprobar recursos iniciales, llama a `CanQueue(...)` y, si la cola acepta el pedido, publica `World.IssueOrder(Order.StartProduction(...))`.
+
+En `ProductionQueue.ResolveOrder(...)`, la orden se comprueba de nuevo: la cola debe estar habilitada, el elemento debe pertenecer al tipo de cola, tiene que aparecer entre los elementos construibles y debe respetar los límites aplicables. El coste y el tiempo se calculan antes de crear el elemento de producción y añadirlo a la cola.
+
+Durante los ticks, `TickInner(...)` avanza el primer elemento cuando existe trabajo y la producción no está pausada. La finalización programa una tarea al final del frame. Para unidades que no son edificios, esa tarea intenta `BuildUnit(unit)`; si no puede crearla, existe una ruta de notificación de bloqueo. Por tanto, **finalizar el progreso de producción y conseguir que la unidad aparezca en el mundo son etapas diferentes**.
+
+Referencias:
+- [`ProductionPaletteWidget.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Widgets/ProductionPaletteWidget.cs)
+- [`ProductionQueue.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs)
+- [`OrderManager.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Network/OrderManager.cs)
+
+En la parte de red, `OrderManager.ProcessOrders()` procesa las órdenes asociadas a cada frame y envía un hash de sincronización del mundo mediante `World.SyncHash()` en el recorrido correspondiente. Esto respalda la distinción entre órdenes deterministas/sincronizadas y persistencia en un archivo de guardado.
+
+**Pendiente:** seguir el sistema concreto de guardado/carga de la cola, el destino de edificios completados, los tests de producción y los casos de salida bloqueada.
+
+### 11.4 Estado actualizado de la evidencia
+
+| Pregunta | Estado |
+|---|---|
+| ¿La acción de movimiento puede producir efectos distintos del desplazamiento? | **Confirmado** en código; recorrido global parcial |
+| ¿La construcción de vías separa comprobación y ejecución? | **Confirmado** en código |
+| ¿La UI de OpenRA emite una orden de producción? | **Confirmado** en código |
+| ¿La cola de OpenRA revalida y procesa la orden? | **Confirmado** en código |
+| ¿La finalización garantiza que la unidad aparezca? | **No**; existe una ruta de creación que puede fallar |
+| ¿`ISync` prueba que una cola se guarda y restaura? | **No**; se requiere trazar el mecanismo de guardado |
+| ¿Se han localizado tests end-to-end para las tres rutas? | **Todavía no**; la búsqueda no permite afirmar que no existan |
+| ¿Se ejecutaron builds o tests en esta auditoría? | **No** |
+
+### 11.5 Próximas comprobaciones prioritarias
+
+1. Seguir `game::walk_move` en Cataclysm DDA y enlazarlo con las pruebas existentes.
+2. Identificar tests concretos de comandos de vía en OpenTTD y seguir el callback del resultado.
+3. Encontrar el mecanismo real de guardado/carga de la cola de OpenRA y pruebas relacionadas.
+4. Documentar por separado los resultados de búsqueda negativos como “no localizado”, nunca como “no existe”.
