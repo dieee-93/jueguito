@@ -670,8 +670,8 @@ La infraestructura CMake declara entradas del caso de regresión —incluyendo s
 
 Fuentes fijadas:
 - [`OpenRA.Test/OpenRA.Test.csproj`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Test/OpenRA.Test.csproj)
-- [`OpenRA.Test/OpenRA.Game/OrderTest.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c75504d48c1ebd/OpenRA.Test/OpenRA.Game/OrderTest.cs)
-- [`OpenRA.Game/Network/GameSave.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c75504d48c1ebd/OpenRA.Game/Network/GameSave.cs)
+- [`OpenRA.Test/OpenRA.Game/OrderTest.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Test/OpenRA.Game/OrderTest.cs)
+- [`OpenRA.Game/Network/GameSave.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Network/GameSave.cs)
 - [`OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs)
 
 El proyecto `OpenRA.Test` referencia Microsoft.NET.Test.Sdk y NUnit. Se localizó `OrderTest.cs`, que contiene pruebas relacionadas con el round-trip de órdenes serializadas. Esto demuestra que hay tests automatizados para ciertos contratos de órdenes; **no** demuestra que se verifique toda la aplicación de órdenes en el mundo de juego.
@@ -703,3 +703,12 @@ En la búsqueda acotada por nombres y contenido no se localizó un test específ
 - [ ] OpenRA: inspeccionar el contenido completo de `OrderTest.cs` y ampliar búsqueda de pruebas indirectas de carga de partidas y producción.
 - [ ] No declarar cobertura total de ninguno de los tres proyectos sin resultados de cobertura o un inventario exhaustivo de tests.
 - [ ] No afirmar ejecución de tests: esta iteración fue documental y estática.
+
+
+### 17.7 Triangulación externa adicional — OpenRA y pruebas de sistemas de juego
+
+Como contraste con la inspección estática, la discusión pública del [PR #22142 de OpenRA](https://github.com/OpenRA/OpenRA/pull/22142) contiene una conversación de octubre-noviembre de 2025 sobre una corrección de `ProductionQueue`. En ella, un participante pregunta cómo probar traits y propone añadir pruebas de producción; una respuesta del proyecto señala que no cuentan con pruebas unitarias adecuadas para sistemas dentro del juego y que sus tests se concentran más en sistemas técnicos y validaciones de YAML. La conversación también pide acompañar cambios de comportamiento con casos de prueba.
+
+Esta fuente externa respalda —para esa discusión y ese momento— la cautela de no asumir que el proyecto tiene pruebas unitarias de todas sus mecánicas de juego. No debe extrapolarse a cada subsistema ni a todas las revisiones posteriores: es evidencia de una conversación de desarrollo concreta, no un inventario completo de cobertura. La revisión del código fijada en este documento sigue siendo la base para describir el comportamiento de `ProductionQueue`.
+
+Fuente adicional: [PR #22142 — Encapsulates StartProduction order to fix infinite production bug](https://github.com/OpenRA/OpenRA/pull/22142).
