@@ -712,3 +712,83 @@ Como contraste con la inspección estática, la discusión pública del [PR #221
 Esta fuente externa respalda —para esa discusión y ese momento— la cautela de no asumir que el proyecto tiene pruebas unitarias de todas sus mecánicas de juego. No debe extrapolarse a cada subsistema ni a todas las revisiones posteriores: es evidencia de una conversación de desarrollo concreta, no un inventario completo de cobertura. La revisión del código fijada en este documento sigue siendo la base para describir el comportamiento de `ProductionQueue`.
 
 Fuente adicional: [PR #22142 — Encapsulates StartProduction order to fix infinite production bug](https://github.com/OpenRA/OpenRA/pull/22142).
+
+
+---
+
+## 18. Segunda pasada: inspección del comportamiento real de los tests
+
+Esta sección afina la sección 17 a partir del contenido completo de archivos de prueba y del resultado esperado de OpenTTD. Se mantiene el alcance documental: no se ejecutaron las suites.
+
+### 18.1 Cataclysm DDA: precisar qué significa “movimiento integrado”
+
+Fuentes:
+- [`tests/move_cost_test.cpp`, revisión `0947a14`](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/tests/move_cost_test.cpp)
+- [`tests/cardio_test.cpp`, revisión `4936af7`](https://github.com/CleverRaven/Cataclysm-DDA/blob/4936af7e8b3a97f2abc67d24566c1b915fe3a415/tests/cardio_test.cpp)
+- [`tests/monster_test.cpp`, revisión `4936af7`](https://github.com/CleverRaven/Cataclysm-DDA/blob/4936af7e8b3a97f2abc67d24566c1b915fe3a415/tests/monster_test.cpp)
+
+La revisión del archivo completo de coste confirma que no se limita a comparar unos pocos números: organiza escenarios con `GIVEN/WHEN/THEN`, normaliza condiciones de personaje y terreno, y contrasta calzado, mutaciones y modos de movimiento. Incluye también una prueba de `avatar_action::move(...)` que comprueba los puntos de movimiento consumidos al caminar, agacharse o avanzar en posición prona. Esto es un paso más allá de probar únicamente `run_cost`, aunque no sustituye una prueba completa de todas las ramas de movimiento del juego.
+
+En `cardio_test.cpp`, el helper `running_steps` usa `g->walk_move` y verifica posición alternada entre dos casillas, decremento de puntos de movimiento y descenso de resistencia durante el ciclo de carrera. El test también compara distancia recorrida con valores esperados para escenarios de condición física. Es una prueba de integración localizada de movimiento y fisiología, pero deliberadamente opera en un terreno sencillo y despejado.
+
+La búsqueda adicional en `monster_test.cpp` encontró pruebas de navegación de monstruos alrededor de la “reality bubble”, de bloqueo por paredes y de consistencia de obstáculos entre mapa local y overmap. Son pruebas relevantes de navegación/representación espacial, pero **no deben presentarse como tests de movimiento del personaje jugador**. La prueba de pared lleva el nombre `monster_cant_enter_reality_bubble_because_wall`; la prueba de obstáculos compara que los lugares marcados como obstáculos sigan siendo no transitables en el overmap después de desplazarse fuera del área local.
+
+**Conclusión refinada:** hay evidencia de tres familias distintas: cálculo de coste del personaje, movimiento del jugador con consecuencias fisiológicas y navegación/obstáculos de monstruos. No se encontró aún una matriz exhaustiva de ramas de `game::walk_move` para rampas, monturas, vehículos, objetos agarrados y todas las colisiones. Además, los dos primeros archivos citados pertenecen a revisiones distintas; no se debe inferir que ambos existen en el mismo SHA sin comprobarlo.
+
+### 18.2 OpenTTD: el resultado esperado demuestra éxitos y rechazos observables
+
+Fuentes:
+- [`regression/regression/main.nut`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/regression/regression/main.nut)
+- [`regression/regression/result.txt`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/regression/regression/result.txt)
+- [`cmake/scripts/Regression.cmake`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/cmake/scripts/Regression.cmake)
+
+La comparación de script y salida esperada confirma que `Regression::Rail()` no solo contiene operaciones que deberían funcionar. Hay llamadas que devuelven `false` intercaladas con operaciones exitosas, y luego se consulta el estado de las baldosas mediante `HasTransportType`, `IsRailTile`, `GetSignalType`, etc. Así se prueban resultados positivos y negativos de la API y algunos efectos posteriores sobre el mundo.
+
+El harness:
+1. abre una partida de prueba (`test.sav`);
+2. ejecuta OpenTTD con configuración de regresión;
+3. recoge salida y errores;
+4. detecta archivos de crash;
+5. normaliza detalles variables de logs;
+6. compara línea por línea la salida con `result.txt` y falla si hay diferencias o cambia el número de líneas.
+
+Es importante no sobrerrepresentar este método: la salida esperada fija el contrato observable del script, pero por sí sola no explica la razón de cada rechazo. Para atribuir un `false` a propiedad, pendiente, obstáculo u otra regla hay que trazar ese caso hasta la implementación y los datos de la partida de prueba. Esta pasada no ha demostrado una prueba dedicada para cada causa de rechazo de `CmdBuildSingleRail`.
+
+**Conclusión refinada:** el patrón de OpenTTD sí es una prueba de regresión funcional con secuencias de cambios de mundo y resultados observables; no es simplemente una prueba de que “el script corre”. Su debilidad para nuestra auditoría es la trazabilidad semántica: el archivo de resultados dice qué ocurrió, pero no siempre por qué.
+
+### 18.3 OpenRA: el contrato exacto de `OrderTest.cs`
+
+Fuente:
+- [`OpenRA.Test/OpenRA.Game/OrderTest.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Test/OpenRA.Game/OrderTest.cs)
+
+El test helper `RoundTripOrder` deserializa bytes con `Order.Deserialize` y vuelve a serializarlos. Los seis casos cubren:
+- orden vacía;
+- orden no encolada;
+- orden encolada;
+- destino posicional con valores de coordenadas extremos;
+- destino inválido;
+- campos adicionales (`TargetString`, `ExtraLocation`, `ExtraData`, `IsImmediate`).
+
+La aserción es que el arreglo de bytes tras el round-trip sea idéntico al original. Esto verifica el contrato de serialización de la estructura `Order`, incluyendo algunos valores límite y campos opcionales. **No** verifica que la orden se valide, se ejecute, cambie el mundo, sobreviva a un guardado completo o produzca el mismo resultado al reproducir una partida.
+
+La discusión del [PR #22142](https://github.com/OpenRA/OpenRA/pull/22142) añade evidencia operacional relevante: la conversación documenta un bug de producción infinita vinculado a la reutilización de una acción/delegado invalidado al crear nuevos elementos de cola. En la discusión, un colaborador pregunta cómo probar traits y recibe la respuesta de que el proyecto no dispone de pruebas unitarias adecuadas para sistemas internos de juego, aunque sí cubre algunos sistemas técnicos y validaciones YAML. El PR estaba abierto y sin fusionar en la consulta realizada; por tanto, se utiliza como evidencia de un problema y de la discusión de pruebas, no como prueba de que esa corrección ya esté en la revisión `e7e9e4a`.
+
+**Conclusión refinada:** el test localizado es sólido para el round-trip de bytes de órdenes, pero queda varios niveles antes de probar la semántica de una orden o la restauración de una simulación. La conversación de desarrollo refuerza que no hay que confundir la existencia de un proyecto NUnit con cobertura uniforme de la lógica del juego.
+
+### 18.4 Matriz de cobertura refinada
+
+| Sistema/comportamiento | Test observado | Aserción directa | Lo que no se puede concluir |
+|---|---|---|---|
+| Coste de movimiento DDA | `move_cost_test.cpp` | Coste calculado con efectos de postura, calzado, terreno y rasgos | Que toda la ruta de movimiento sea correcta |
+| Movimiento/carrera DDA | `cardio_test.cpp` | Posición, decremento de movimientos, resistencia y distancia de carrera | Cobertura de todos los obstáculos y ramas de `walk_move` |
+| Obstáculos/navegación DDA | `monster_test.cpp` | Bloqueo de monstruos por pared y consistencia de obstáculos en overmap | Que el jugador tenga las mismas rutas y cobertura |
+| Construcción OpenTTD | `Regression::Rail` + `result.txt` | Resultados true/false de operaciones y consultas de estado | La causa semántica de cada fallo sin rastrear la implementación |
+| Serialización OpenRA | `OrderTest.cs` | Bytes idénticos tras deserializar y serializar órdenes | Ejecución de órdenes, persistencia de partida o restauración de cola |
+| Producción OpenRA | PR #22142 y código de `ProductionQueue` | Se documenta un bug real en el ciclo de producción y una necesidad reconocida de tests | Que exista un test automatizado que reproduzca el bug en la revisión fijada |
+
+### 18.5 Ajustes a las lecciones de diseño
+
+- Cada prueba debe declarar su **frontera**: función aislada, actor/mecánica integrada, API pública o simulación completa.
+- Cuando una secuencia produce un fallo, conviene registrar no solo el resultado booleano, sino también el motivo de rechazo y el estado anterior/posterior cuando la arquitectura lo permita.
+- En mecánicas con callbacks diferidos o efectos al final del frame, probar el estado inmediato no basta: también hay que probar el efecto diferido, cancelación y repetición. El caso de producción infinita de OpenRA es un ejemplo concreto de un error de ciclo de vida que puede escapar a una prueba superficial.
+- Los tests de serialización deben complementarse con tests de significado: la estructura se restaura y luego la simulación conserva las invariantes relevantes.
