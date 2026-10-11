@@ -350,3 +350,75 @@ En la parte de red, `OrderManager.ProcessOrders()` procesa las órdenes asociada
 2. Identificar tests concretos de comandos de vía en OpenTTD y seguir el callback del resultado.
 3. Encontrar el mecanismo real de guardado/carga de la cola de OpenRA y pruebas relacionadas.
 4. Documentar por separado los resultados de búsqueda negativos como “no localizado”, nunca como “no existe”.
+
+
+---
+
+## 12. Iteración de seguimiento — validación, tests y límites de evidencia
+
+### 12.1 Cataclysm DDA: validaciones internas de `game::walk_move`
+
+Se inspeccionó la implementación de `game::walk_move(...)` en la revisión fijada de Cataclysm DDA. Entre las validaciones observadas directamente están:
+
+- Si el personaje tiene la bandera de movimiento de fase, la función usa una ruta especial y coloca al personaje directamente.
+- Los pasajes estrechos rechazan al personaje o a su montura si son demasiado grandes.
+- El nivel de iluminación del destino puede bloquear el movimiento a personajes con una mutación específica, salvo condiciones que lo permiten.
+- Una montura puede impedir el desplazamiento si no tiene energía o no puede ejecutar sus propios efectos de movimiento.
+- La función continúa con comprobaciones relacionadas con vehículos y objetos agarrados; al final de la ruta exitosa hay efectos posteriores al movimiento mediante `on_move_effects()`.
+
+La función contiene más lógica que estas condiciones; la lista es ilustrativa, no un inventario exhaustivo. La firma declara que devuelve `false` si el movimiento falla por cualquier razón, según el comentario en `game.h`.
+
+Fuentes:
+- [`game.cpp`, revisión fijada](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/src/game.cpp)
+- [`game.h`, revisión fijada](https://github.com/CleverRaven/Cataclysm-DDA/blob/0947a14bab4cf6b3243568cb78ac3e6a2a108e1d/src/game.h)
+
+**Tests:** además de las pruebas de costes previamente documentadas, la búsqueda encontró un test de cardio que llama directamente a `g->walk_move(...)` y comprueba que el coste de movimiento disminuye y que la resistencia se consume durante la carrera. El test encontrado está en otra revisión de trabajo más reciente, por lo que debe mantenerse separado de la evidencia de la revisión fijada hasta verificar el mismo caso en ese SHA.
+
+Fuente exploratoria: [`tests/cardio_test.cpp`](https://github.com/CleverRaven/Cataclysm-DDA/blob/4936af7e8b3a97f2abc67d24566c1b915fe3a415/tests/cardio_test.cpp).
+
+**Lectura correcta:** existe al menos una prueba que ejercita el desplazamiento en un escenario de carrera y observa efectos temporales; no se ha demostrado cobertura integral de todas las restricciones de `walk_move`.
+
+### 12.2 OpenTTD: el protocolo de comandos tiene fase de prueba
+
+En la revisión fijada, `CmdBuildSingleRail(...)` valida el tipo de vía y la orientación; para una baldosa ferroviaria existente comprueba propiedad, compatibilidad, combinaciones de vías, presencia de trenes, pendientes y señales. Cuando la bandera de ejecución está activa, modifica los bits de vía y actualiza los contadores de infraestructura.
+
+El sistema general de comandos tiene una fase explícita de prueba/preparación: `InternalExecuteValidateTestAndPrepExec(...)` puede detener el proceso si la prueba falla, si solo se está estimando el coste o si el dinero disponible no alcanza. Si procede, prepara el estado para la ejecución real. `InternalDoAfter(...)` trata de forma distinta los resultados de prueba y los de ejecución; en la ejecución normal puede descontar el coste a la empresa.
+
+Fuentes:
+- [`rail_cmd.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/rail_cmd.cpp)
+- [`command.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/command.cpp)
+- [`rail_gui.cpp`](https://github.com/OpenTTD/OpenTTD/blob/d48d693d7ff09b643846e23a5f033cf3582ab27f/src/rail_gui.cpp)
+
+**Tests:** la búsqueda por símbolos y nombres relacionados no localizó una prueba específica de extremo a extremo para `CmdBuildSingleRail`. No debe inferirse que no existe. Sigue pendiente una búsqueda más amplia por el sistema de tests de OpenTTD y sus convenciones.
+
+### 12.3 OpenRA: cola de producción y persistencia aún no cerrada
+
+La inspección de `ProductionQueue.cs` confirma que `ProductionQueue` implementa `ISync` y que algunos campos tienen atributos `VerifySync`. Esto forma parte de la infraestructura de sincronización/verificación de estado; **no prueba por sí solo que el contenido completo de `Queue` se guarde y restaure**.
+
+Se intentó localizar el mecanismo de guardado buscando símbolos de serialización y guardado en los archivos examinados, pero la búsqueda no fue suficiente para trazar el recorrido. Por lo tanto, la conclusión responsable sigue siendo **persistencia no confirmada en esta iteración**, no ausencia de persistencia.
+
+La UI de producción está identificada en `ProductionPaletteWidget.cs`; la orden se procesa en `ProductionQueue.ResolveOrder(...)`; el progreso avanza desde `TickInner(...)`; y el trabajo completado puede intentar crear una unidad mediante `BuildUnit(...)`. La finalización y la creación en el mapa siguen siendo etapas distintas.
+
+Fuentes:
+- [`ProductionPaletteWidget.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Widgets/ProductionPaletteWidget.cs)
+- [`ProductionQueue.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs)
+- [`OrderManager.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Network/OrderManager.cs)
+
+### 12.4 Matriz de avance
+
+| Pregunta | Resultado actual | Confianza |
+|---|---|---|
+| ¿Qué valida `game::walk_move`? | Tamaño, luz en ciertas condiciones, montura, vehículos/objetos agarrados y más | Confirmado parcialmente en código |
+| ¿Hay un test que invoque `walk_move`? | Sí, se encontró un test de cardio en otra revisión de trabajo | Confirmado en la revisión enlazada; falta alinear SHA |
+| ¿OpenTTD separa validación de ejecución? | Sí, en el protocolo de comandos y en el comando de vía | Confirmado en código |
+| ¿Se encontró test específico de construcción de vía? | No localizado por ahora | Búsqueda incompleta |
+| ¿OpenRA sincroniza/verifica estado? | Sí, el gestor procesa órdenes por frame y calcula hash de sincronización | Confirmado en código |
+| ¿La cola de OpenRA se guarda y restaura? | No se ha cerrado el recorrido | Pendiente |
+| ¿Se ejecutaron tests propios? | No | Confirmado: no ejecutados |
+
+### 12.5 Próximos pasos técnicos
+
+1. Buscar tests de movimiento en la misma revisión fijada de Cataclysm DDA y enlazar cada test con la regla que comprueba.
+2. Revisar la estructura de tests de OpenTTD y buscar casos de construcción de vía por el comportamiento probado, no solo por el nombre de la función.
+3. Seguir el sistema de guardado/carga de OpenRA desde el punto de entrada del guardado hasta la reconstrucción de actores/traits; comprobar si la cola se reconstruye, se serializa o se deriva de otro estado.
+4. Mantener diferenciados los SHA fijados de los resultados de búsqueda en ramas más recientes.
