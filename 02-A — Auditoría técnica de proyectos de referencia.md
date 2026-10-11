@@ -422,3 +422,87 @@ Fuentes:
 2. Revisar la estructura de tests de OpenTTD y buscar casos de construcción de vía por el comportamiento probado, no solo por el nombre de la función.
 3. Seguir el sistema de guardado/carga de OpenRA desde el punto de entrada del guardado hasta la reconstrucción de actores/traits; comprobar si la cola se reconstruye, se serializa o se deriva de otro estado.
 4. Mantener diferenciados los SHA fijados de los resultados de búsqueda en ramas más recientes.
+
+
+---
+
+## 13. Triangulación de fuentes — guardado y carga en OpenRA
+
+> **Método aplicado:** contrastar implementación, contratos de interfaces, documentación oficial y registro histórico de la implementación. Las fuentes no son todas independientes, pero aportan tipos distintos de evidencia.
+
+### 13.1 Hallazgo principal: OpenRA reconstruye una partida guardada mediante órdenes
+
+La evidencia más directa es la descripción de la PR [#16411 — Implement game save plumbing and enable for missions](https://github.com/OpenRA/OpenRA/pull/16411). La descripción explica que el guardado/carga se implementó mediante **resimulación de órdenes** y que, para restaurar ciertos datos que no se recuperan solo de las órdenes, los traits pueden aportar datos adicionales al guardar y recibirlos al cargar. La PR también indica que chat y órdenes inmediatas no se guardan en ese mecanismo, y que las partidas de campaña fueron el caso habilitado inicialmente.
+
+Esto ajusta la hipótesis previa: no debe suponerse que OpenRA guarda una fotografía serializada completa de cada campo de cada sistema. En el mecanismo descrito, la simulación vuelve a procesar órdenes para reconstruir el estado y existe un canal adicional para datos específicos de traits.
+
+### 13.2 Triangulación en el código fuente
+
+**Fuente A — Contrato de datos adicionales:** en `OpenRA.Game/Traits/TraitsInterfaces.cs`, `IGameSaveTraitData` declara dos operaciones:
+- `IssueTraitData(Actor self)`: devuelve nodos de datos que se pueden adjuntar al guardado.
+- `ResolveTraitData(Actor self, MiniYaml data)`: restaura esos datos al completar la carga.
+
+El mismo archivo define notificaciones `INotifyGameSaved` y `INotifyGameLoaded`, lo que confirma que el ciclo de guardado/carga tiene puntos de extensión para los traits.
+
+Fuente: [`TraitsInterfaces.cs`, revisión fijada](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Traits/TraitsInterfaces.cs).
+
+**Fuente B — Restauración al terminar la carga:** en `OpenRA.Game/World.cs`, el flujo de ticks comprueba la transición desde `IsLoadingGameSave`. Al finalizar, recorre los datos de traits almacenados, llama a `ResolveTraitData(...)`, limpia esos datos y notifica `INotifyGameLoaded`. Esto verifica en el código el contrato de restauración declarado por la interfaz.
+
+Fuente: [`World.cs`, revisión fijada](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/World.cs).
+
+**Fuente C — Ejemplos concretos:** `GameSaveViewportManager` implementa `IGameSaveTraitData` para restaurar el centro de la cámara y, en una ruta de espectador, el jugador que se está observando. `Selection` también implementa el contrato para guardar y recuperar la selección de actores. Son ejemplos de estado de interfaz que no conviene confundir con la simulación determinista del mundo.
+
+Fuentes:
+- [`GameSaveViewportManager.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/GameSaveViewportManager.cs)
+- [`Selection.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/World/Selection.cs)
+
+### 13.3 ¿Qué implica para ProductionQueue?
+
+En la revisión fijada, `ProductionQueue` implementa `ISync` y marca algunos campos, como `Enabled` e `IsValidFaction`, con `[VerifySync]`. La declaración de la clase **no** incluye `IGameSaveTraitData`, y el campo `Queue` no aparece marcado en los fragmentos examinados como un bloque de datos de guardado explícito.
+
+La interpretación prudente es:
+
+- La cola participa en la infraestructura de sincronización/verificación del estado.
+- No se encontró evidencia de que la cola serialice directamente su contenido mediante `IGameSaveTraitData`.
+- Dado que la partida se reconstruye mediante resimulación de órdenes, es plausible que la cola se regenere como efecto de volver a procesar las órdenes de producción; sin embargo, todavía no se ha trazado el recorrido exacto de `StartProduction` durante la restauración para confirmar qué parte del estado se reconstruye y en qué momento.
+- Por tanto, **no afirmar que la cola no se guarda**, ni afirmar todavía que su contenido se reconstruye íntegramente por órdenes. La implementación general está confirmada; el comportamiento específico de la cola queda parcialmente demostrado.
+
+Fuente de implementación: [`ProductionQueue.cs`, revisión fijada](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Mods.Common/Traits/Player/ProductionQueue.cs).
+
+### 13.4 Triangulación documental e histórica
+
+La referencia oficial de traits de OpenRA describe `ProductionQueue` como el trait que permite producir unidades o construir edificios y explica que distintas estructuras pueden tener colas separadas. Esta documentación valida el papel funcional del componente, pero no documenta el mecanismo interno de persistencia.
+
+Fuente: [documentación oficial de traits: ProductionQueue](https://docs.openra.net/en/release/traits/).
+
+La issue histórica [#2743 — Save Game Support](https://github.com/OpenRA/OpenRA/issues/2743) documenta el objetivo inicial del soporte de guardado: guardar para reproducir desincronizaciones, reanudar partidas y continuar misiones. La PR #16411 es más específica sobre el mecanismo implementado. Son fuentes históricas del mismo desarrollo, no confirmaciones independientes del código actual.
+
+### 13.5 Estado de la conclusión
+
+| Afirmación | Evidencia | Estado |
+|---|---|---|
+| El mecanismo de guardado de OpenRA usa resimulación de órdenes | Descripción de PR #16411 | Confirmado por registro de implementación |
+| Los traits pueden aportar datos adicionales al guardado y restaurarlos | Interfaz + implementación de `World` + traits concretos | Confirmado por varias piezas de código |
+| `ISync` por sí solo significa que un campo se serializa en un guardado | No respaldado; los contratos son distintos | Rechazado |
+| `ProductionQueue` implementa `IGameSaveTraitData` en la revisión estudiada | La declaración de clase no lo incluye | No |
+| La cola completa se reconstruye íntegramente mediante órdenes al cargar | No se trazó aún la restauración de órdenes de producción | Pendiente |
+| Se localizaron tests automatizados específicos de round-trip de guardado de ProductionQueue | La búsqueda por símbolos no los encontró | No localizado; no equivale a inexistente |
+
+### 13.6 Siguiente comprobación
+
+Para cerrar esta pregunta se necesita seguir el código de lectura del archivo de guardado hasta el mecanismo de reproducción de órdenes y verificar si los pedidos de producción anteriores al punto guardado se vuelven a ejecutar. Después hay que identificar qué estado de la cola queda reconstruido por esa vía y si existe una prueba automatizada que compare el estado antes y después de guardar/cargar.
+
+---
+
+## 14. Protocolo de triangulación para futuras conclusiones
+
+Para cada hallazgo importante se registrarán, cuando estén disponibles:
+
+1. **Implementación:** archivo, símbolo y revisión.
+2. **Invocador o consumidor:** cómo entra y sale la operación del subsistema.
+3. **Prueba automatizada:** test concreto y qué afirma realmente.
+4. **Documentación oficial:** contrato funcional declarado.
+5. **Historial de desarrollo:** issue/PR que explique la intención o los límites conocidos.
+6. **Resultado de triangulación:** qué se confirma, qué sigue siendo inferencia y qué no se ha encontrado.
+
+No se exigirá que cada hallazgo tenga cinco fuentes si el proyecto no las ofrece. En esos casos se documentará explícitamente la limitación y se evitará presentar una inferencia como hecho confirmado.
