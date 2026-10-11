@@ -579,3 +579,39 @@ OpenRA muestra una estrategia de persistencia basada en **reconstrucción determ
 No trasladar automáticamente este patrón al proyecto. Debe compararse con el coste de resimulación, la compatibilidad entre versiones, la aleatoriedad, los efectos externos y las mecánicas que requieren restauración exacta e inmediata.
 
 **Estado de la auditoría OpenRA:** mecanismo general de guardado/carga confirmado con varias fuentes; persistencia específica de ProductionQueue y sus tests aún sin cerrar.
+
+
+---
+
+## 16. Seguimiento de la triangulación — fuentes oficiales externas y conclusión de OpenRA
+
+Se contrastó la implementación con fuentes publicadas por el propio proyecto:
+
+- El anuncio oficial del playtest [20190825](https://www.openra.net/news/playtest-20190825/) anuncia soporte de guardado y carga y especifica que misiones y partidas de escaramuza podían guardarse y reanudarse.
+- El changelog histórico de OpenRA recoge en el release 20191117 la incorporación de soporte de guardado/carga para misiones y escaramuzas y enumera los PR asociados.
+- La PR [#16411](https://github.com/OpenRA/OpenRA/pull/16411) describe el diseño basado en resimulación de órdenes y datos adicionales de traits.
+- El código de [`GameSave.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/Network/GameSave.cs) implementa el archivo, la lectura de órdenes y metadatos, la reproducción ordenada de órdenes y la emisión del hash para validar la restauración.
+- [`World.cs`](https://github.com/OpenRA/OpenRA/blob/e7e9e4ad270221d7fb9725b348c75504d48c1ebd/OpenRA.Game/World.cs) aplica los datos complementarios de traits al finalizar la restauración.
+
+Estas fuentes confirman el mecanismo general y su disponibilidad en versiones publicadas. No son cinco validaciones independientes: la PR, el código y los anuncios pertenecen al mismo proyecto y describen etapas relacionadas del mismo desarrollo.
+
+### Conclusión refinada sobre ProductionQueue
+
+La cola de producción se procesa mediante órdenes y ticks; el guardado reproduce el historial de órdenes. Es razonable esperar que las órdenes de producción reconstruyan buena parte del estado de la cola, pero no se ha demostrado el round-trip de todos sus estados.
+
+En concreto, sigue pendiente verificar mediante el recorrido exacto y/o una prueba:
+- progreso parcial de una unidad en producción;
+- recursos cobrados y su consistencia tras la reproducción;
+- posición relativa de elementos en la cola;
+- pausas, bloqueos y límites;
+- estado cuando la producción terminó pero no se pudo colocar la unidad.
+
+No se localizó un test automatizado dedicado a guardar/cargar una `ProductionQueue` en la búsqueda realizada ni en los archivos cambiados por la PR #16411. Esto es “no localizado”, no una afirmación de inexistencia.
+
+### Estado de la fase
+
+- **Guardado/carga general de OpenRA:** confirmado con código, PR, changelog y anuncio oficial.
+- **Persistencia de datos complementarios de traits:** confirmada en interfaz y flujo de restauración.
+- **Reconstrucción específica y completa de ProductionQueue:** pendiente de verificación.
+- **Test automatizado de round-trip de ProductionQueue:** no localizado.
+- **Build o test ejecutado durante esta investigación:** no.
